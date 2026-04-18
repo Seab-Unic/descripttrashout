@@ -360,6 +360,4 @@ async def admin_stats(client, c):
     await c.answer()
 
 
-if __name__ == "__main__":
-    print("Бот запущен...")
-    app.run()
+app.run()

@@ -7,8 +7,8 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from gostcrypto.gost.cipher import Cipher
 from gostcrypto.gost.padding import Padding
 
-BOT_TOKEN = "7697314088:AAFIz-49btQQuj8B5VRj1l8HB35ZuPEkHpg"
-API_ID = 12345678
+BOT_TOKEN = "твой токен"
+API_ID = "твой API ID"
 API_HASH = "ваш_api_hash"
 FILE = "data.json"
 

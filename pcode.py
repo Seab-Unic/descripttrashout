@@ -1,4 +1,3 @@
-# pip install pyrogram gostcrypto tgcrypto
 import json
 import os
 from datetime import datetime

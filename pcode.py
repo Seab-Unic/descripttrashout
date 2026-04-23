@@ -5,9 +5,9 @@ from datetime import datetime
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-BOT_TOKEN = "УДАЛЕН"
-API_ID = 0
-API_HASH = "УДАЛЕН"
+BOT_TOKEN = ""
+API_ID = 
+API_HASH = ""
 FILE = "data.json"
 
 GOST_KEY = b'0123456789abcdef0123456789abcdef'

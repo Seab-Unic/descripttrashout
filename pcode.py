@@ -1,48 +1,102 @@
 import json
 import os
+import struct
 from datetime import datetime
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from gostcrypto.gost.cipher import Cipher
-from gostcrypto.gost.padding import Padding
 
-BOT_TOKEN = "твой токен"
-API_ID = "твой API ID"
-API_HASH = "ваш_api_hash"
+BOT_TOKEN = "УДАЛЕН"
+API_ID = 0
+API_HASH = "УДАЛЕН"
 FILE = "data.json"
 
-# Ключ шифрования ГОСТ (обязательно 32 байта для алгоритма Кузнечик)
 GOST_KEY = b'0123456789abcdef0123456789abcdef'
-
-MTProto_PROXY = {
-    "hostname": "1.2.3.4",
-    "port": 443,
-    "secret": "ваш_секретный_ключ_прокси"
-}
 
 app = Client(
     "bot_session_name",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
-    proxy=MTProto_PROXY
 )
 
 user_states = {}
 
+_SBOX = [
+    [4, 10, 9, 2, 13, 8, 0, 14, 6, 11, 1, 12, 7, 15, 5, 3],
+    [14, 11, 4, 12, 6, 13, 15, 10, 2, 3, 8, 1, 0, 7, 5, 9],
+    [5, 8, 1, 13, 10, 3, 4, 2, 14, 15, 12, 7, 6, 0, 9, 11],
+    [7, 13, 10, 1, 0, 8, 9, 15, 14, 4, 6, 12, 11, 2, 5, 3],
+    [6, 12, 7, 1, 5, 15, 13, 8, 4, 10, 9, 14, 0, 3, 11, 2],
+    [4, 11, 10, 0, 7, 2, 1, 13, 3, 6, 8, 5, 9, 12, 15, 14],
+    [13, 11, 4, 1, 3, 15, 5, 9, 0, 10, 14, 7, 6, 8, 2, 12],
+    [1, 15, 13, 0, 5, 7, 10, 4, 9, 2, 3, 14, 6, 11, 8, 12]
+]
 
-# --- ШИФРОВАНИЕ ГОСТ ---
+
+def _get_keys(key_bytes):
+    return [struct.unpack('<I', key_bytes[i:i + 4])[0] for i in range(0, 32, 4)]
+
+
+def _substitute(block):
+    res = 0
+    for i in range(8):
+        idx = (block >> (4 * i)) & 0xF
+        res |= _SBOX[7 - i][idx] << (4 * i)
+    return res
+
+
+def _encrypt_block(block, keys):
+    n1 = block & 0xFFFFFFFF
+    n0 = (block >> 32) & 0xFFFFFFFF
+    for i in range(24):
+        n1 = (_substitute((n1 + keys[i % 8]) & 0xFFFFFFFF) ^ n0) & 0xFFFFFFFF
+        n0, n1 = n1, n0
+    for i in range(7, -1, -1):
+        n1 = (_substitute((n1 + keys[i]) & 0xFFFFFFFF) ^ n0) & 0xFFFFFFFF
+        n0, n1 = n1, n0
+    return (n1 << 32) | n0
+
+
+def _decrypt_block(block, keys):
+    n1 = block & 0xFFFFFFFF
+    n0 = (block >> 32) & 0xFFFFFFFF
+    for i in range(8):
+        n1 = (_substitute((n1 + keys[i]) & 0xFFFFFFFF) ^ n0) & 0xFFFFFFFF
+        n0, n1 = n1, n0
+    for i in range(24):
+        n1 = (_substitute((n1 + keys[7 - (i % 8)]) & 0xFFFFFFFF) ^ n0) & 0xFFFFFFFF
+        n0, n1 = n1, n0
+    return (n1 << 32) | n0
+
+
+def _pkcs7_pad(data):
+    pad_len = 8 - (len(data) % 8)
+    return data + bytes([pad_len] * pad_len)
+
+
+def _pkcs7_unpad(data):
+    return data[:-data[-1]]
+
+
 def encrypt_data(data_str):
-    cipher = Cipher('kuznyechik-ecb', key=GOST_KEY, padding=Padding.PKCS7)
-    return cipher.encrypt(data_str.encode('utf-8'))
+    keys = _get_keys(GOST_KEY)
+    data_bytes = _pkcs7_pad(data_str.encode('utf-8'))
+    res = b''
+    for i in range(0, len(data_bytes), 8):
+        block = struct.unpack('>Q', data_bytes[i:i + 8])[0]
+        res += struct.pack('>Q', _encrypt_block(block, keys))
+    return res
 
 
 def decrypt_data(data_bytes):
-    cipher = Cipher('kuznyechik-ecb', key=GOST_KEY, padding=Padding.PKCS7)
-    return cipher.decrypt(data_bytes).decode('utf-8')
+    keys = _get_keys(GOST_KEY)
+    res = b''
+    for i in range(0, len(data_bytes), 8):
+        block = struct.unpack('>Q', data_bytes[i:i + 8])[0]
+        res += struct.pack('>Q', _decrypt_block(block, keys))
+    return _pkcs7_unpad(res).decode('utf-8')
 
 
-# --- РАБОТА С БАЗОЙ ---
 def get_db():
     if os.path.exists(FILE):
         try:
@@ -66,12 +120,11 @@ def save_db(data):
         f.write(encrypted)
 
 
-# --- КЛАВИАТУРЫ ---
 def reg_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Клиент", callback_data="reg_Клиент")],
         [InlineKeyboardButton(text="Выноситель", callback_data="reg_Выноситель")],
-        [InlineKeyboardButton(text="Админ", callback_data="reg_Админ")]
+        [InlineKeyboardButton(text="Админ", callback_data="reg_admin")]
     ])
 
 
@@ -98,7 +151,6 @@ def admin_kb():
     ])
 
 
-# --- ХЭНДЛЕРЫ ---
 @app.on_message(filters.command("start") & filters.private)
 async def start(client, m):
     db = get_db()
@@ -124,31 +176,35 @@ async def change_role(client, c):
     await c.answer()
 
 
-@app.on_callback_query(filters.regex("^reg_"))
+@app.on_callback_query(filters.regex("^reg_admin"))
+async def reg_admin_prompt(client, c):
+    uid = str(c.from_user.id)
+    user_states[uid] = "waiting_admin_pass"
+    await c.message.edit_text("Введите пароль для роли Администратора:")
+    await c.answer()
+
+
+@app.on_callback_query(filters.regex("^reg_(Клиент|Выноситель)"))
 async def reg(client, c):
     uid = str(c.from_user.id)
     db = get_db()
     role = c.data.split("_", 1)[1]
 
     if uid in db["users"]:
-        # Проверка на незавершенные заказы
         has_unfinished = False
         for o in db["orders"].values():
             if o["status"] in ["pending", "active"] and (o["client_id"] == uid or o["remover_id"] == uid):
                 has_unfinished = True
                 break
-
         if has_unfinished:
             return await c.answer("Сначала завершите все текущие заказы", show_alert=True)
 
     name = c.from_user.username or c.from_user.first_name or "Аноним"
+    is_new = uid not in db["users"]
     db["users"][uid] = {"name": name, "role": role}
     save_db(db)
 
-    text = "Роль обновлена!" if uid in db["users"] else "Регистрация успешна!"
-    # На самом деле uid уже в db, поэтому просто:
-    text = "Роль успешно изменена!" if "change" in c.message.text or len(db["users"]) > 1 else "Регистрация успешна!"
-
+    text = "Регистрация успешна!" if is_new else "Роль успешно изменена!"
     await c.message.edit_text(f"{text}\nВы теперь: {role}")
     await show_main_menu(c.message, role)
     await c.answer()
@@ -273,7 +329,6 @@ async def back_remover(client, c):
     await c.answer()
 
 
-# --- УДАЛЕНИЕ ПОЛЬЗОВАТЕЛЯ (АДМИН) ---
 @app.on_callback_query(filters.regex("^del_user"))
 async def del_user(client, c):
     uid = str(c.from_user.id)
@@ -283,61 +338,6 @@ async def del_user(client, c):
     user_states[uid] = "waiting_for_delete_id"
     await c.message.edit_text("Введите ID пользователя для удаления:")
     await c.answer()
-
-
-@app.on_message(filters.text & ~filters.command & filters.private)
-async def text_handler(client, m):
-    uid = str(m.from_user.id)
-    db = get_db()
-    state = user_states.get(uid)
-
-    if uid not in db["users"]:
-        await m.reply("Пожалуйста, начните с /start")
-        return
-
-    if state == "waiting_for_address":
-        user_states[uid] = "waiting_for_details"
-        user_states[f"{uid}_addr"] = m.text
-        await m.reply("Напишите детали (этаж, пакеты):")
-    elif state == "waiting_for_details":
-        address = user_states.pop(f"{uid}_addr")
-        details = m.text
-        user_states.pop(uid)
-
-        order_id = f"ORD-{int(datetime.now().timestamp())}"
-        db["orders"][order_id] = {
-            "client_id": uid,
-            "address": address,
-            "details": details,
-            "status": "pending",
-            "remover_id": None,
-            "date": datetime.now().strftime("%Y-%m-%d %H:%M")
-        }
-        save_db(db)
-
-        await m.reply(
-            f"Заказ <b>{order_id}</b> создан!\n\nАдрес: {address}\nДетали: {details}\n\nИщем выносителя...",
-            reply_markup=client_kb()
-        )
-    elif state == "waiting_for_delete_id":
-        target_id = m.text.strip()
-        user_states.pop(uid, None)
-        if target_id in db["users"]:
-            # Удаляем все заказы этого пользователя
-            orders_to_del = [oid for oid, o in db["orders"].items() if
-                             o["client_id"] == target_id or o["remover_id"] == target_id]
-            for oid in orders_to_del:
-                del db["orders"][oid]
-
-            del db["users"][target_id]
-            save_db(db)
-            await m.reply(f"Пользователь {target_id} и его заказы удалены.", reply_markup=admin_kb())
-        else:
-            await m.reply("Пользователь не найден.", reply_markup=admin_kb())
-    else:
-        role = db["users"][uid]["role"]
-        kb = client_kb() if role == "Клиент" else remover_kb() if role == "Выноситель" else admin_kb()
-        await m.reply("Воспользуйтесь меню кнопок ниже", reply_markup=kb)
 
 
 @app.on_callback_query(filters.regex("^admin_stats"))
@@ -359,4 +359,77 @@ async def admin_stats(client, c):
     await c.answer()
 
 
+@app.on_message(filters.text & filters.private)
+async def text_handler(client, m):
+    if m.text.startswith("/"):
+        return
+
+    uid = str(m.from_user.id)
+    db = get_db()
+    state = user_states.get(uid)
+
+    if uid not in db["users"]:
+        await m.reply("Пожалуйста, начните с /start")
+        return
+
+    if state == "waiting_admin_pass":
+        user_states.pop(uid, None)
+        if m.text == "123":
+            name = m.from_user.username or m.from_user.first_name or "Аноним"
+            db["users"][uid] = {"name": name, "role": "Админ"}
+            save_db(db)
+            await m.reply("Пароль верный!\nРегистрация успешна!\nВы теперь: Админ", reply_markup=admin_kb())
+        else:
+            await m.reply("Неверный пароль!", reply_markup=reg_kb())
+
+    elif state == "waiting_for_address":
+        user_states[uid] = "waiting_for_details"
+        user_states[f"{uid}_addr"] = m.text
+        await m.reply("Напишите детали (этаж, пакеты):")
+
+    elif state == "waiting_for_details":
+        address = user_states.pop(f"{uid}_addr")
+        details = m.text
+        user_states.pop(uid)
+
+        order_id = f"ORD-{int(datetime.now().timestamp())}"
+        db["orders"][order_id] = {
+            "client_id": uid,
+            "address": address,
+            "details": details,
+            "status": "pending",
+            "remover_id": None,
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M")
+        }
+        save_db(db)
+
+        await m.reply(
+            f"Заказ <b>{order_id}</b> создан!\n\nАдрес: {address}\nДетали: {details}\n\nИщем выносителя...",
+            reply_markup=client_kb()
+        )
+
+    elif state == "waiting_for_delete_id":
+        target_id = m.text.strip()
+        user_states.pop(uid, None)
+
+        if target_id in db["users"]:
+            orders_to_del = [oid for oid, o in db["orders"].items() if
+                             o["client_id"] == target_id or o["remover_id"] == target_id]
+
+            for oid in orders_to_del:
+                del db["orders"][oid]
+
+            del db["users"][target_id]
+            save_db(db)
+            await m.reply(f"Пользователь {target_id} и его заказы успешно удалены.", reply_markup=admin_kb())
+        else:
+            await m.reply("Пользователь не найден.", reply_markup=admin_kb())
+
+    else:
+        role = db["users"][uid]["role"]
+        kb = client_kb() if role == "Клиент" else remover_kb() if role == "Выноситель" else admin_kb()
+        await m.reply("Воспользуйтесь меню кнопок ниже", reply_markup=kb)
+
+
+print("Бот запущен...")
 app.run()

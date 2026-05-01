@@ -838,7 +838,4 @@ async def cleanup_expired_data():
         save_db(db)
         logger.info(f"Cleanup: removed {deleted_count} expired orders")
 
-
-if __name__ == "__main__":
-    logger.info("Bot starting with 152-FZ compliance mode")
-    app.run()
+app.run()

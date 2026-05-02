@@ -16,18 +16,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8654776112:AAFwcaURIE1d9WJM_T0lxA5oa6bUSe6ZXfg")
-API_ID = int(os.getenv("API_ID", "37110537"))
-API_HASH = os.getenv("API_HASH", "cdbbbf551cc4e1bbe4f48293e1193326")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+API_ID = int(os.getenv("API_ID", ""))
+API_HASH = os.getenv("API_HASH", "")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "123")
-DADATA_API_KEY = os.getenv("DADATA_API_KEY", "cf7b21165e788a558a05449046ddeab78dbf153f")
-DADATA_SECRET_KEY = os.getenv("DADATA_SECRET_KEY", "d6ddb27fb2a980853186f620c416b461800464e3")
+DADATA_API_KEY = os.getenv("DADATA_API_KEY", "")
+DADATA_SECRET_KEY = os.getenv("DADATA_SECRET_KEY", "")
 DATA_FILE = "data.json"
 HASH_FILE = DATA_FILE + ".hash"
 DATA_RETENTION_DAYS = int(os.getenv("DATA_RETENTION_DAYS", "1095"))
 
 app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user_states: Dict[str, Dict[str, Any]] = {}
+
 
 def compute_file_hash(filepath: str) -> Optional[str]:
     if not os.path.exists(filepath):
@@ -37,6 +38,7 @@ def compute_file_hash(filepath: str) -> Optional[str]:
             return hashlib.sha256(f.read()).hexdigest()
     except Exception:
         return None
+
 
 def verify_db_integrity(data_file: str, hash_file: str) -> bool:
     current_hash = compute_file_hash(data_file)
@@ -51,11 +53,13 @@ def verify_db_integrity(data_file: str, hash_file: str) -> bool:
     except Exception:
         return False
 
+
 def save_hash(data_file: str, hash_file: str):
     h = compute_file_hash(data_file)
     if h:
         with open(hash_file, "w") as f:
             f.write(h)
+
 
 def get_db() -> Dict[str, Any]:
     if not os.path.exists(DATA_FILE):
@@ -71,6 +75,7 @@ def get_db() -> Dict[str, Any]:
     except Exception:
         return {"users": {}, "orders": {}, "consents": {}}
 
+
 def save_db(data: Dict[str, Any]) -> bool:
     try:
         temp = f"{DATA_FILE}.tmp"
@@ -82,11 +87,14 @@ def save_db(data: Dict[str, Any]) -> bool:
     except Exception:
         return False
 
+
 def hash_sensitive(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
+
 def is_likely_city(text: str) -> bool:
     return bool(text and text.strip() and re.search(r'[а-яё]', text, re.IGNORECASE))
+
 
 async def validate_city(city_name: str) -> Tuple[Optional[str], Optional[str]]:
     if not is_likely_city(city_name):
@@ -114,20 +122,25 @@ async def validate_city(city_name: str) -> Tuple[Optional[str], Optional[str]]:
     except Exception:
         return None, "Сервис проверки городов временно недоступен."
 
+
 def get_role_keyboard(role: str) -> Optional[ReplyKeyboardMarkup]:
     keyboards = {
-        "Клиент": [["Заказать вынос", "Мои заказы"], ["Мои данные", "Сменить город", "Сменить роль"], ["Удалить аккаунт"]],
-        "Выноситель": [["Найти заказ", "Завершить заказ"], ["Мои данные", "Сменить город", "Сменить роль"], ["Удалить аккаунт"]],
+        "Клиент": [["Заказать вынос", "Мои заказы"], ["Мои данные", "Сменить город", "Сменить роль"],
+                   ["Удалить аккаунт"]],
+        "Выноситель": [["Найти заказ", "Завершить заказ"], ["Мои данные", "Сменить город", "Сменить роль"],
+                       ["Удалить аккаунт"]],
         "Админ": [["Статистика", "Управление пользователями"], ["Журнал аудита"]]
     }
     kb = keyboards.get(role)
     return ReplyKeyboardMarkup(kb, resize_keyboard=True) if kb else None
+
 
 def consent_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Я согласен на обработку ПДн", callback_data="consent_accept")],
         [InlineKeyboardButton("📄 Политика конфиденциальности", url="https://yoursite.ru/privacy")]
     ])
+
 
 def reg_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
@@ -136,12 +149,14 @@ def reg_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("Админ", callback_data="reg_Админ_needpass")]
     ])
 
+
 def role_switch_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("Клиент", callback_data="switch_Клиент")],
         [InlineKeyboardButton("Выноситель", callback_data="switch_Выноситель")],
         [InlineKeyboardButton("Админ", callback_data="switch_Админ_needpass")]
     ])
+
 
 def require_registered(func):
     @wraps(func)
@@ -156,11 +171,14 @@ def require_registered(func):
             )
             return
         return await func(client, message)
+
     return wrapper
+
 
 async def ask_city(client: Client, uid: str, role: str, is_role_change: bool = False):
     user_states[uid] = {"state": "waiting_for_city", "role": role, "is_role_change": is_role_change}
     await client.send_message(uid, "Введите ваш город (например: Москва, Новосибирск):")
+
 
 async def ask_order_details(client: Client, uid: str, city: str, address: str):
     user_states[uid] = {"state": "waiting_for_details", "city": city, "address": address}
@@ -169,6 +187,7 @@ async def ask_order_details(client: Client, uid: str, city: str, address: str):
         "Введите описание заказа (этаж, код, вес) или нажмите 'Пропустить':",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Пропустить", callback_data="skip_details")]])
     )
+
 
 async def create_order_final(client: Client, uid: str, city: str, address: str, details: Optional[str] = None):
     db = get_db()
@@ -180,13 +199,18 @@ async def create_order_final(client: Client, uid: str, city: str, address: str, 
         "created_at": datetime.now().isoformat()
     }
     if save_db(db):
-        await client.send_message(uid, f"Заказ {order_id} создан! Ищем выносителя...", reply_markup=get_role_keyboard("Клиент"))
+        await client.send_message(uid, f"Заказ {order_id} создан! Ищем выносителя...",
+                                  reply_markup=get_role_keyboard("Клиент"))
     else:
         await client.send_message(uid, "Ошибка создания заказа.", reply_markup=get_role_keyboard("Клиент"))
+
 
 @app.on_message(filters.command("start") & filters.private)
 async def start(client: Client, message: Message):
     uid = str(message.from_user.id)
+    # Сбрасываем состояние пользователя, чтобы избежать конфликтов
+    user_states.pop(uid, None)
+
     db = get_db()
     user = db["users"].get(uid)
 
@@ -207,6 +231,7 @@ async def start(client: Client, message: Message):
             reply_markup=consent_kb()
         )
 
+
 @app.on_callback_query(filters.regex(r"^consent_accept$"))
 async def handle_consent(client: Client, callback_query: CallbackQuery):
     uid = str(callback_query.from_user.id)
@@ -221,10 +246,12 @@ async def handle_consent(client: Client, callback_query: CallbackQuery):
         }
     db["users"][uid]["consent_given"] = True
     db["users"][uid]["consent_timestamp"] = timestamp
-    db["consents"][uid] = {"given_at": timestamp, "ip_hash": hash_sensitive(str(callback_query.from_user.id)), "version": "1.0"}
+    db["consents"][uid] = {"given_at": timestamp, "ip_hash": hash_sensitive(str(callback_query.from_user.id)),
+                           "version": "1.0"}
     save_db(db)
     await callback_query.message.edit_text("Спасибо! Теперь выберите вашу роль:", reply_markup=reg_kb())
     await callback_query.answer()
+
 
 @app.on_callback_query(filters.regex(r"^reg_"))
 async def handle_registration(client: Client, callback_query: CallbackQuery):
@@ -245,7 +272,8 @@ async def handle_registration(client: Client, callback_query: CallbackQuery):
 
     role = data.split("_", 1)[1]
     if user.get("role") == role and user.get("city"):
-        await callback_query.message.edit_text(f"Вы уже зарегистрированы как {role}.", reply_markup=get_role_keyboard(role))
+        await callback_query.message.edit_text(f"Вы уже зарегистрированы как {role}.",
+                                               reply_markup=get_role_keyboard(role))
         return
 
     await callback_query.message.delete()
@@ -257,7 +285,9 @@ async def handle_registration(client: Client, callback_query: CallbackQuery):
         await ask_city(client, uid, role, is_role_change=bool(user.get("role")))
     await callback_query.answer()
 
-@app.on_message(filters.text & filters.private & ~filters.command(["start", "cancel", "mydata", "delete_account", "withdraw_consent"]))
+
+@app.on_message(filters.text & filters.private & ~filters.command(
+    ["start", "cancel", "mydata", "delete_account", "withdraw_consent"]))
 @require_registered
 async def handle_text(client: Client, message: Message):
     uid = str(message.from_user.id)
@@ -321,6 +351,7 @@ async def handle_text(client: Client, message: Message):
         else:
             await message.reply("Используйте кнопки меню.", reply_markup=get_role_keyboard(role))
 
+
 async def handle_state_input(client: Client, message: Message):
     uid = str(message.from_user.id)
     state = user_states.get(uid)
@@ -332,7 +363,8 @@ async def handle_state_input(client: Client, message: Message):
             db = get_db()
             db["users"][uid]["role"] = "Админ"
             save_db(db)
-            await message.reply("✅ Пароль верен. Вы назначены администратором.", reply_markup=get_role_keyboard("Админ"))
+            await message.reply("✅ Пароль верен. Вы назначены администратором.",
+                                reply_markup=get_role_keyboard("Админ"))
             user_states.pop(uid, None)
         else:
             await message.reply("❌ Неверный пароль. Попробуйте ещё раз или нажмите /cancel.")
@@ -361,13 +393,18 @@ async def handle_state_input(client: Client, message: Message):
                 "consent_timestamp": datetime.now().isoformat()
             }
             save_db(db)
-            await message.reply(f"Регистрация завершена! Роль: {new_role}, Город: {city}", reply_markup=get_role_keyboard(new_role))
+            await message.reply(f"Регистрация завершена! Роль: {new_role}, Город: {city}",
+                                reply_markup=get_role_keyboard(new_role))
         else:
             db["users"][uid]["city"] = city
-            if is_change:
+            # Если у пользователя ещё нет роли, устанавливаем её
+            if "role" not in db["users"][uid] or db["users"][uid]["role"] is None:
+                db["users"][uid]["role"] = new_role
+            elif is_change:
                 db["users"][uid]["role"] = new_role
             save_db(db)
-            await message.reply(f"Город изменён на {city}", reply_markup=get_role_keyboard(db["users"][uid]["role"]))
+            current_role = db["users"][uid].get("role", "Клиент")
+            await message.reply(f"Город изменён на {city}", reply_markup=get_role_keyboard(current_role))
         user_states.pop(uid, None)
         return
 
@@ -391,7 +428,8 @@ async def handle_state_input(client: Client, message: Message):
         if city:
             await ask_order_details(client, uid, city, addr)
         else:
-            await message.reply("Ошибка: не указан город. Начните заказ заново.", reply_markup=get_role_keyboard("Клиент"))
+            await message.reply("Ошибка: не указан город. Начните заказ заново.",
+                                reply_markup=get_role_keyboard("Клиент"))
         user_states.pop(uid, None)
         return
 
@@ -405,6 +443,7 @@ async def handle_state_input(client: Client, message: Message):
 
     user_states.pop(uid, None)
     await message.reply("Сбой состояния. Начните с /start")
+
 
 async def show_my_orders(client: Client, message: Message):
     uid = str(message.from_user.id)
@@ -422,6 +461,7 @@ async def show_my_orders(client: Client, message: Message):
             text += f"Заказ {oid}\nГород: {order.get('city')}\nАдрес: {order.get('address')}{details}\nСтатус: {status_map.get(order['status'], 'Неизвестно')}\n---\n"
     await message.reply(text if has_orders else "У вас пока нет заказов.", reply_markup=get_role_keyboard("Клиент"))
 
+
 async def show_my_data(client: Client, message: Message):
     uid = str(message.from_user.id)
     db = get_db()
@@ -437,8 +477,10 @@ async def show_my_data(client: Client, message: Message):
         f"Согласие дано: {user.get('consent_timestamp', 'Нет')}\n"
         f"Кол-во заказов: {orders_count}\n"
     )
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Запросить удаление всех данных", callback_data="req_delete_all")]])
+    kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("🗑 Запросить удаление всех данных", callback_data="req_delete_all")]])
     await message.reply(text, reply_markup=kb)
+
 
 async def request_delete_account(client: Client, message: Message):
     uid = str(message.from_user.id)
@@ -446,14 +488,17 @@ async def request_delete_account(client: Client, message: Message):
         [InlineKeyboardButton("⚠️ Да, удалить безвозвратно", callback_data="confirm_delete_account")],
         [InlineKeyboardButton("Отмена", callback_data="cancel_action")]
     ])
-    await message.reply("Вы уверены? Это действие необратимо. Все ваши данные и история заказов будут удалены.", reply_markup=kb)
+    await message.reply("Вы уверены? Это действие необратимо. Все ваши данные и история заказов будут удалены.",
+                        reply_markup=kb)
+
 
 async def find_orders(client: Client, message: Message):
     uid = str(message.from_user.id)
     db = get_db()
     user_city = db["users"][uid].get("city")
     if not user_city:
-        return await message.reply("Сначала укажите город через 'Сменить город'.", reply_markup=get_role_keyboard("Выноситель"))
+        return await message.reply("Сначала укажите город через 'Сменить город'.",
+                                   reply_markup=get_role_keyboard("Выноситель"))
 
     for order in db["orders"].values():
         if order.get("remover_id") == uid and order.get("status") == "active":
@@ -474,6 +519,7 @@ async def find_orders(client: Client, message: Message):
     else:
         kb.inline_keyboard.append([InlineKeyboardButton("Назад", callback_data="back_remover")])
         await message.reply(f"Доступные заказы в {user_city}:", reply_markup=kb)
+
 
 async def finish_order(client: Client, message: Message):
     uid = str(message.from_user.id)
@@ -499,11 +545,14 @@ async def finish_order(client: Client, message: Message):
             f"Выноситель {remover_name} отметил заказ {active_oid} как выполненный.\nПодтверждаете?",
             reply_markup=kb
         )
-        await message.reply(f"Запрос на подтверждение выполнения заказа {active_oid} отправлен клиенту.", reply_markup=get_role_keyboard("Выноситель"))
+        await message.reply(f"Запрос на подтверждение выполнения заказа {active_oid} отправлен клиенту.",
+                            reply_markup=get_role_keyboard("Выноситель"))
     except Exception:
         db["orders"][active_oid]["status"] = "active"
         save_db(db)
-        await message.reply("Не удалось связаться с клиентом. Заказ остаётся активным.", reply_markup=get_role_keyboard("Выноситель"))
+        await message.reply("Не удалось связаться с клиентом. Заказ остаётся активным.",
+                            reply_markup=get_role_keyboard("Выноситель"))
+
 
 async def admin_stats(client: Client, message: Message):
     db = get_db()
@@ -520,6 +569,7 @@ async def admin_stats(client: Client, message: Message):
     )
     await message.reply(text, reply_markup=get_role_keyboard("Админ"))
 
+
 async def list_users_for_admin(client: Client, message: Message):
     db = get_db()
     admin_uid = str(message.from_user.id)
@@ -535,8 +585,10 @@ async def list_users_for_admin(client: Client, message: Message):
         kb.inline_keyboard.append([InlineKeyboardButton(label, callback_data=f"admin_user_{uid}")])
     await message.reply("Управление пользователями:", reply_markup=kb)
 
+
 async def show_audit_log(client: Client, message: Message):
     await message.reply("Журнал аудита отключён.", reply_markup=get_role_keyboard("Админ"))
+
 
 @app.on_callback_query()
 async def handle_callbacks(client: Client, callback_query: CallbackQuery):
@@ -557,7 +609,8 @@ async def handle_callbacks(client: Client, callback_query: CallbackQuery):
         db["users"][uid]["role"] = role_target
         save_db(db)
         await callback_query.message.edit_text(f"Ваша роль изменена на {role_target}.")
-        await callback_query.message.reply(f"Новое меню для {role_target}:", reply_markup=get_role_keyboard(role_target))
+        await callback_query.message.reply(f"Новое меню для {role_target}:",
+                                           reply_markup=get_role_keyboard(role_target))
         await callback_query.answer()
         return
 
@@ -597,7 +650,8 @@ async def handle_callbacks(client: Client, callback_query: CallbackQuery):
                 reply_markup=kb
             )
             await callback_query.message.delete()
-            await callback_query.message.reply("Запрос отправлен клиенту.", reply_markup=get_role_keyboard("Выноситель"))
+            await callback_query.message.reply("Запрос отправлен клиенту.",
+                                               reply_markup=get_role_keyboard("Выноситель"))
         except Exception:
             await callback_query.answer("Ошибка отправки уведомления", show_alert=True)
 
@@ -674,7 +728,8 @@ async def handle_callbacks(client: Client, callback_query: CallbackQuery):
             [InlineKeyboardButton("👑 Админ", callback_data=f"admin_set_role_{target_uid}_Админ")],
             [InlineKeyboardButton("🔙 Назад", callback_data=f"admin_user_{target_uid}")]
         ])
-        await callback_query.message.edit_text(f"Выберите новую роль для {target_user.get('name')}:", reply_markup=role_kb)
+        await callback_query.message.edit_text(f"Выберите новую роль для {target_user.get('name')}:",
+                                               reply_markup=role_kb)
         await callback_query.answer()
 
     elif data.startswith("admin_set_role_"):
@@ -710,7 +765,8 @@ async def handle_callbacks(client: Client, callback_query: CallbackQuery):
         target_uid = data.split("_", 2)[2]
         if target_uid in db["users"]:
             for oid in list(db["orders"].keys()):
-                if db["orders"][oid].get("client_id") == target_uid or db["orders"][oid].get("remover_id") == target_uid:
+                if db["orders"][oid].get("client_id") == target_uid or db["orders"][oid].get(
+                        "remover_id") == target_uid:
                     del db["orders"][oid]
             del db["users"][target_uid]
             if target_uid in db["consents"]:
@@ -719,6 +775,7 @@ async def handle_callbacks(client: Client, callback_query: CallbackQuery):
             await callback_query.message.edit_text("Пользователь удалён.")
             await list_users_for_admin(client, callback_query.message)
         await callback_query.answer()
+
 
 async def process_confirmation(client: Client, c: CallbackQuery, uid: str, oid: str, approved: bool):
     db = get_db()
@@ -730,15 +787,18 @@ async def process_confirmation(client: Client, c: CallbackQuery, uid: str, oid: 
         order["status"] = "active"
         save_db(db)
         await client.send_message(order["remover_id"], f"Заказ {oid} подтверждён. Работайте!")
-        await c.message.edit_text(f"Заказ {oid} подтверждён. Выноситель приступит к выполнению.", reply_markup=get_role_keyboard("Клиент"))
+        await c.message.edit_text(f"Заказ {oid} подтверждён. Выноситель приступит к выполнению.",
+                                  reply_markup=get_role_keyboard("Клиент"))
     else:
         order["status"] = "pending"
         rem_id = order.pop("remover_id", None)
         save_db(db)
         if rem_id:
             await client.send_message(rem_id, f"Заказ {oid} отклонён клиентом.")
-        await c.message.edit_text(f"Заказ {oid} отклонён. Поиск нового выносителя.", reply_markup=get_role_keyboard("Клиент"))
+        await c.message.edit_text(f"Заказ {oid} отклонён. Поиск нового выносителя.",
+                                  reply_markup=get_role_keyboard("Клиент"))
     await c.answer()
+
 
 async def process_completion_confirmation(client: Client, c: CallbackQuery, uid: str, oid: str, approved: bool):
     db = get_db()
@@ -751,16 +811,22 @@ async def process_completion_confirmation(client: Client, c: CallbackQuery, uid:
         save_db(db)
         remover_id = order.get("remover_id")
         if remover_id:
-            await client.send_message(remover_id, f"Клиент подтвердил выполнение заказа {oid}! Заказ завершён.", reply_markup=get_role_keyboard("Выноситель"))
-        await c.message.edit_text(f"Заказ {oid} успешно выполнен! Спасибо за использование сервиса.", reply_markup=get_role_keyboard("Клиент"))
+            await client.send_message(remover_id, f"Клиент подтвердил выполнение заказа {oid}! Заказ завершён.",
+                                      reply_markup=get_role_keyboard("Выноситель"))
+        await c.message.edit_text(f"Заказ {oid} успешно выполнен! Спасибо за использование сервиса.",
+                                  reply_markup=get_role_keyboard("Клиент"))
     else:
         order["status"] = "active"
         save_db(db)
         remover_id = order.get("remover_id")
         if remover_id:
-            await client.send_message(remover_id, f"Клиент не подтвердил выполнение заказа {oid}. Продолжите выполнение.", reply_markup=get_role_keyboard("Выноситель"))
-        await c.message.edit_text(f"Вы отказались подтвердить выполнение заказа {oid}. Заказ остаётся в работе.", reply_markup=get_role_keyboard("Клиент"))
+            await client.send_message(remover_id,
+                                      f"Клиент не подтвердил выполнение заказа {oid}. Продолжите выполнение.",
+                                      reply_markup=get_role_keyboard("Выноситель"))
+        await c.message.edit_text(f"Вы отказались подтвердить выполнение заказа {oid}. Заказ остаётся в работе.",
+                                  reply_markup=get_role_keyboard("Клиент"))
     await c.answer()
+
 
 async def process_delete_account(client: Client, callback_query: CallbackQuery):
     uid = str(callback_query.from_user.id)
@@ -781,6 +847,7 @@ async def process_delete_account(client: Client, callback_query: CallbackQuery):
     await callback_query.message.edit_text("Ваш аккаунт и данные успешно удалены.")
     await callback_query.answer()
 
+
 @app.on_message(filters.command("cancel") & filters.private)
 async def cancel_command(client: Client, message: Message):
     uid = str(message.from_user.id)
@@ -791,6 +858,7 @@ async def cancel_command(client: Client, message: Message):
         await message.reply("Отменено.", reply_markup=get_role_keyboard(role) if role else reg_kb())
     else:
         await message.reply("Нет активных действий.")
+
 
 @app.on_message(filters.command("withdraw_consent") & filters.private)
 @require_registered
@@ -805,15 +873,18 @@ async def withdraw_consent(client: Client, message: Message):
         "Для повторной активации используйте /start."
     )
 
+
 @app.on_message(filters.command("mydata") & filters.private)
 @require_registered
 async def mydata_command(client: Client, message: Message):
     await show_my_data(client, message)
 
+
 @app.on_message(filters.command("delete_account") & filters.private)
 @require_registered
 async def delete_account_command(client: Client, message: Message):
     await request_delete_account(client, message)
+
 
 async def cleanup_expired_data():
     db = get_db()
@@ -830,5 +901,6 @@ async def cleanup_expired_data():
             continue
     if deleted:
         save_db(db)
+
 
 app.run()

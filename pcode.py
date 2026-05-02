@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import logging
 import hashlib
 from datetime import datetime, timedelta
 from functools import wraps
@@ -17,42 +16,51 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-API_ID = int(os.getenv("API_ID", ""))
-API_HASH = os.getenv("API_HASH", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8654776112:AAFwcaURIE1d9WJM_T0lxA5oa6bUSe6ZXfg")
+API_ID = int(os.getenv("API_ID", "37110537"))
+API_HASH = os.getenv("API_HASH", "cdbbbf551cc4e1bbe4f48293e1193326")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "123")
-DADATA_API_KEY = os.getenv("DADATA_API_KEY", "")
-DADATA_SECRET_KEY = os.getenv("DADATA_SECRET_KEY", "")
+DADATA_API_KEY = os.getenv("DADATA_API_KEY", "cf7b21165e788a558a05449046ddeab78dbf153f")
+DADATA_SECRET_KEY = os.getenv("DADATA_SECRET_KEY", "d6ddb27fb2a980853186f620c416b461800464e3")
 DATA_FILE = "data.json"
-LOG_FILE = "audit.log"
+HASH_FILE = DATA_FILE + ".hash"
 DATA_RETENTION_DAYS = int(os.getenv("DATA_RETENTION_DAYS", "1095"))
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler("bot.log", encoding="utf-8"), logging.StreamHandler()]
-)
-logger = logging.getLogger(__name__)
-
-audit_logger = logging.getLogger("audit")
-audit_logger.setLevel(logging.INFO)
-fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
-fh.setFormatter(logging.Formatter("%(asctime)s | %(message)s"))
-audit_logger.addHandler(fh)
 
 app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user_states: Dict[str, Dict[str, Any]] = {}
 
+def compute_file_hash(filepath: str) -> Optional[str]:
+    if not os.path.exists(filepath):
+        return None
+    try:
+        with open(filepath, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except Exception:
+        return None
 
-def log_audit(action: str, user_id: str, details: Optional[str] = None):
-    msg = f"ACTION:{action} | UID:{user_id}"
-    if details:
-        msg += f" | DETAILS:{details}"
-    audit_logger.info(msg)
+def verify_db_integrity(data_file: str, hash_file: str) -> bool:
+    current_hash = compute_file_hash(data_file)
+    if current_hash is None:
+        return True
+    if not os.path.exists(hash_file):
+        return True
+    try:
+        with open(hash_file, "r") as f:
+            stored_hash = f.read().strip()
+        return current_hash == stored_hash
+    except Exception:
+        return False
+
+def save_hash(data_file: str, hash_file: str):
+    h = compute_file_hash(data_file)
+    if h:
+        with open(hash_file, "w") as f:
+            f.write(h)
 
 def get_db() -> Dict[str, Any]:
     if not os.path.exists(DATA_FILE):
+        return {"users": {}, "orders": {}, "consents": {}}
+    if not verify_db_integrity(DATA_FILE, HASH_FILE):
         return {"users": {}, "orders": {}, "consents": {}}
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
@@ -60,8 +68,7 @@ def get_db() -> Dict[str, Any]:
         for key in ["users", "orders", "consents"]:
             data.setdefault(key, {})
         return data
-    except Exception as e:
-        logger.error(f"DB read error: {e}")
+    except Exception:
         return {"users": {}, "orders": {}, "consents": {}}
 
 def save_db(data: Dict[str, Any]) -> bool:
@@ -70,9 +77,9 @@ def save_db(data: Dict[str, Any]) -> bool:
         with open(temp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         os.replace(temp, DATA_FILE)
+        save_hash(DATA_FILE, HASH_FILE)
         return True
-    except Exception as e:
-        logger.error(f"DB save error: {e}")
+    except Exception:
         return False
 
 def hash_sensitive(value: str) -> str:
@@ -104,14 +111,13 @@ async def validate_city(city_name: str) -> Tuple[Optional[str], Optional[str]]:
                             return normalized, None
                     return None, f"Город '{city_name}' не найден."
                 return None, f"Ошибка DaData ({resp.status})."
-    except Exception as e:
-        logger.error(f"DaData error: {e}")
+    except Exception:
         return None, "Сервис проверки городов временно недоступен."
 
 def get_role_keyboard(role: str) -> Optional[ReplyKeyboardMarkup]:
     keyboards = {
-        "Клиент": [["Заказать вынос", "Мои заказы"], ["Мои данные", "Сменить город"], ["Удалить аккаунт"]],
-        "Выноситель": [["Найти заказ", "Завершить заказ"], ["Мои данные", "Сменить город"], ["Удалить аккаунт"]],
+        "Клиент": [["Заказать вынос", "Мои заказы"], ["Мои данные", "Сменить город", "Сменить роль"], ["Удалить аккаунт"]],
+        "Выноситель": [["Найти заказ", "Завершить заказ"], ["Мои данные", "Сменить город", "Сменить роль"], ["Удалить аккаунт"]],
         "Админ": [["Статистика", "Управление пользователями"], ["Журнал аудита"]]
     }
     kb = keyboards.get(role)
@@ -130,6 +136,13 @@ def reg_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("Админ", callback_data="reg_Админ_needpass")]
     ])
 
+def role_switch_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Клиент", callback_data="switch_Клиент")],
+        [InlineKeyboardButton("Выноситель", callback_data="switch_Выноситель")],
+        [InlineKeyboardButton("Админ", callback_data="switch_Админ_needpass")]
+    ])
+
 def require_registered(func):
     @wraps(func)
     async def wrapper(client, message):
@@ -144,7 +157,6 @@ def require_registered(func):
             return
         return await func(client, message)
     return wrapper
-
 
 async def ask_city(client: Client, uid: str, role: str, is_role_change: bool = False):
     user_states[uid] = {"state": "waiting_for_city", "role": role, "is_role_change": is_role_change}
@@ -168,7 +180,6 @@ async def create_order_final(client: Client, uid: str, city: str, address: str, 
         "created_at": datetime.now().isoformat()
     }
     if save_db(db):
-        log_audit("ORDER_CREATE", uid, f"OID:{order_id}")
         await client.send_message(uid, f"Заказ {order_id} создан! Ищем выносителя...", reply_markup=get_role_keyboard("Клиент"))
     else:
         await client.send_message(uid, "Ошибка создания заказа.", reply_markup=get_role_keyboard("Клиент"))
@@ -185,10 +196,8 @@ async def start(client: Client, message: Message):
             role = "Клиент"
             db["users"][uid]["role"] = role
             save_db(db)
-        log_audit("LOGIN", uid, f"Role:{role}")
         await message.reply(f"С возвращением! Вы вошли как {role}.", reply_markup=get_role_keyboard(role))
     else:
-        log_audit("START_CMD", uid, "Consent required")
         await message.reply(
             "Привет! Для использования сервиса необходимо согласие на обработку персональных данных.\n"
             "Мы собираем: имя, ID Telegram, город, историю заказов.\n"
@@ -214,7 +223,6 @@ async def handle_consent(client: Client, callback_query: CallbackQuery):
     db["users"][uid]["consent_timestamp"] = timestamp
     db["consents"][uid] = {"given_at": timestamp, "ip_hash": hash_sensitive(str(callback_query.from_user.id)), "version": "1.0"}
     save_db(db)
-    log_audit("CONSENT_GIVEN", uid)
     await callback_query.message.edit_text("Спасибо! Теперь выберите вашу роль:", reply_markup=reg_kb())
     await callback_query.answer()
 
@@ -235,7 +243,7 @@ async def handle_registration(client: Client, callback_query: CallbackQuery):
         await callback_query.answer()
         return
 
-    role = data.split("_", 1)[1]  
+    role = data.split("_", 1)[1]
     if user.get("role") == role and user.get("city"):
         await callback_query.message.edit_text(f"Вы уже зарегистрированы как {role}.", reply_markup=get_role_keyboard(role))
         return
@@ -244,7 +252,6 @@ async def handle_registration(client: Client, callback_query: CallbackQuery):
     if user.get("city"):
         db["users"][uid]["role"] = role
         save_db(db)
-        log_audit("ROLE_UPDATE", uid, f"New role: {role}")
         await client.send_message(uid, f"Роль изменена на {role}", reply_markup=get_role_keyboard(role))
     else:
         await ask_city(client, uid, role, is_role_change=bool(user.get("role")))
@@ -262,7 +269,6 @@ async def handle_text(client: Client, message: Message):
     role = db["users"][uid].get("role", "Клиент")
     text = message.text.strip()
 
-    
     if role == "Клиент":
         if text == "Заказать вынос":
             city = db["users"][uid].get("city")
@@ -280,13 +286,14 @@ async def handle_text(client: Client, message: Message):
             await show_my_orders(client, message)
         elif text == "Сменить город":
             await ask_city(client, uid, role, is_role_change=False)
+        elif text == "Сменить роль":
+            await message.reply("Выберите новую роль:", reply_markup=role_switch_kb())
         elif text == "Мои данные":
             await show_my_data(client, message)
         elif text == "Удалить аккаунт":
             await request_delete_account(client, message)
         else:
             await message.reply("Используйте кнопки меню.", reply_markup=get_role_keyboard(role))
-
 
     elif role == "Выноситель":
         if text == "Найти заказ":
@@ -295,13 +302,14 @@ async def handle_text(client: Client, message: Message):
             await finish_order(client, message)
         elif text == "Сменить город":
             await ask_city(client, uid, role, is_role_change=False)
+        elif text == "Сменить роль":
+            await message.reply("Выберите новую роль:", reply_markup=role_switch_kb())
         elif text == "Мои данные":
             await show_my_data(client, message)
         elif text == "Удалить аккаунт":
             await request_delete_account(client, message)
         else:
             await message.reply("Используйте кнопки меню.", reply_markup=get_role_keyboard(role))
-
 
     elif role == "Админ":
         if text == "Статистика":
@@ -324,7 +332,6 @@ async def handle_state_input(client: Client, message: Message):
             db = get_db()
             db["users"][uid]["role"] = "Админ"
             save_db(db)
-            log_audit("ADMIN_PROMOTED", uid)
             await message.reply("✅ Пароль верен. Вы назначены администратором.", reply_markup=get_role_keyboard("Админ"))
             user_states.pop(uid, None)
         else:
@@ -354,14 +361,12 @@ async def handle_state_input(client: Client, message: Message):
                 "consent_timestamp": datetime.now().isoformat()
             }
             save_db(db)
-            log_audit("REGISTRATION_COMPLETE", uid, f"City:{city}")
             await message.reply(f"Регистрация завершена! Роль: {new_role}, Город: {city}", reply_markup=get_role_keyboard(new_role))
         else:
             db["users"][uid]["city"] = city
             if is_change:
                 db["users"][uid]["role"] = new_role
             save_db(db)
-            log_audit("PROFILE_UPDATE", uid, f"City:{city}, Role:{db['users'][uid].get('role')}")
             await message.reply(f"Город изменён на {city}", reply_markup=get_role_keyboard(db["users"][uid]["role"]))
         user_states.pop(uid, None)
         return
@@ -434,7 +439,6 @@ async def show_my_data(client: Client, message: Message):
     )
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Запросить удаление всех данных", callback_data="req_delete_all")]])
     await message.reply(text, reply_markup=kb)
-    log_audit("DATA_ACCESS", uid)
 
 async def request_delete_account(client: Client, message: Message):
     uid = str(message.from_user.id)
@@ -443,7 +447,6 @@ async def request_delete_account(client: Client, message: Message):
         [InlineKeyboardButton("Отмена", callback_data="cancel_action")]
     ])
     await message.reply("Вы уверены? Это действие необратимо. Все ваши данные и история заказов будут удалены.", reply_markup=kb)
-    log_audit("DELETE_REQUEST", uid)
 
 async def find_orders(client: Client, message: Message):
     uid = str(message.from_user.id)
@@ -451,7 +454,6 @@ async def find_orders(client: Client, message: Message):
     user_city = db["users"][uid].get("city")
     if not user_city:
         return await message.reply("Сначала укажите город через 'Сменить город'.", reply_markup=get_role_keyboard("Выноситель"))
-
 
     for order in db["orders"].values():
         if order.get("remover_id") == uid and order.get("status") == "active":
@@ -498,12 +500,10 @@ async def finish_order(client: Client, message: Message):
             reply_markup=kb
         )
         await message.reply(f"Запрос на подтверждение выполнения заказа {active_oid} отправлен клиенту.", reply_markup=get_role_keyboard("Выноситель"))
-    except Exception as e:
-        logger.error(f"Notify client error: {e}")
+    except Exception:
         db["orders"][active_oid]["status"] = "active"
         save_db(db)
         await message.reply("Не удалось связаться с клиентом. Заказ остаётся активным.", reply_markup=get_role_keyboard("Выноситель"))
-
 
 async def admin_stats(client: Client, message: Message):
     db = get_db()
@@ -536,23 +536,30 @@ async def list_users_for_admin(client: Client, message: Message):
     await message.reply("Управление пользователями:", reply_markup=kb)
 
 async def show_audit_log(client: Client, message: Message):
-    if not os.path.exists(LOG_FILE):
-        return await message.reply("Журнал аудита пуст.", reply_markup=get_role_keyboard("Админ"))
-    try:
-        with open(LOG_FILE, "r", encoding="utf-8") as f:
-            lines = f.readlines()[-20:]
-        text = "🔒 Последние записи аудита:\n" + "".join(lines)
-        await message.reply(text, reply_markup=get_role_keyboard("Админ"))
-    except Exception as e:
-        logger.error(f"Read audit log error: {e}")
-        await message.reply("Ошибка чтения журнала.", reply_markup=get_role_keyboard("Админ"))
-
+    await message.reply("Журнал аудита отключён.", reply_markup=get_role_keyboard("Админ"))
 
 @app.on_callback_query()
 async def handle_callbacks(client: Client, callback_query: CallbackQuery):
     data = callback_query.data
     uid = str(callback_query.from_user.id)
     db = get_db()
+
+    if data.startswith("switch_"):
+        role_target = data.split("_", 1)[1]
+        if role_target == "Админ_needpass":
+            user_states[uid] = {"state": "waiting_admin_pass"}
+            await callback_query.message.edit_text("Введите пароль администратора:")
+            await callback_query.answer()
+            return
+        if db["users"].get(uid, {}).get("role") == role_target:
+            await callback_query.answer(f"Вы уже {role_target}", show_alert=True)
+            return
+        db["users"][uid]["role"] = role_target
+        save_db(db)
+        await callback_query.message.edit_text(f"Ваша роль изменена на {role_target}.")
+        await callback_query.message.reply(f"Новое меню для {role_target}:", reply_markup=get_role_keyboard(role_target))
+        await callback_query.answer()
+        return
 
     if data == "order_city_keep":
         city = db["users"][uid].get("city")
@@ -591,8 +598,7 @@ async def handle_callbacks(client: Client, callback_query: CallbackQuery):
             )
             await callback_query.message.delete()
             await callback_query.message.reply("Запрос отправлен клиенту.", reply_markup=get_role_keyboard("Выноситель"))
-        except Exception as e:
-            logger.error(f"Notify client error: {e}")
+        except Exception:
             await callback_query.answer("Ошибка отправки уведомления", show_alert=True)
 
     elif data.startswith("confirm_yes_") or data.startswith("confirm_no_"):
@@ -645,6 +651,7 @@ async def handle_callbacks(client: Client, callback_query: CallbackQuery):
         if not target_user:
             return await callback_query.answer("Пользователь не найден", show_alert=True)
         kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Сменить роль", callback_data=f"admin_change_role_{target_uid}")],
             [InlineKeyboardButton("🗑 Удалить пользователя", callback_data=f"admin_del_{target_uid}")]
         ])
         info = (
@@ -656,20 +663,60 @@ async def handle_callbacks(client: Client, callback_query: CallbackQuery):
         await callback_query.message.edit_text(info, reply_markup=kb)
         await callback_query.answer()
 
+    elif data.startswith("admin_change_role_"):
+        target_uid = data.split("_", 3)[3]
+        target_user = db["users"].get(target_uid)
+        if not target_user:
+            return await callback_query.answer("Пользователь не найден", show_alert=True)
+        role_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("👤 Клиент", callback_data=f"admin_set_role_{target_uid}_Клиент")],
+            [InlineKeyboardButton("🛠 Выноситель", callback_data=f"admin_set_role_{target_uid}_Выноситель")],
+            [InlineKeyboardButton("👑 Админ", callback_data=f"admin_set_role_{target_uid}_Админ")],
+            [InlineKeyboardButton("🔙 Назад", callback_data=f"admin_user_{target_uid}")]
+        ])
+        await callback_query.message.edit_text(f"Выберите новую роль для {target_user.get('name')}:", reply_markup=role_kb)
+        await callback_query.answer()
+
+    elif data.startswith("admin_set_role_"):
+        parts = data.split("_")
+        if len(parts) < 5:
+            return await callback_query.answer("Ошибка формата", show_alert=True)
+        target_uid = parts[3]
+        new_role = "_".join(parts[4:])
+        if new_role not in ["Клиент", "Выноситель", "Админ"]:
+            return await callback_query.answer("Недопустимая роль", show_alert=True)
+        db = get_db()
+        if target_uid not in db["users"]:
+            return await callback_query.answer("Пользователь не найден", show_alert=True)
+        db["users"][target_uid]["role"] = new_role
+        save_db(db)
+        await callback_query.message.edit_text(f"Роль пользователя изменена на {new_role}.")
+        target_user = db["users"].get(target_uid)
+        if target_user:
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Сменить роль", callback_data=f"admin_change_role_{target_uid}")],
+                [InlineKeyboardButton("🗑 Удалить пользователя", callback_data=f"admin_del_{target_uid}")]
+            ])
+            info = (
+                f"Пользователь: {target_user.get('name')}\n"
+                f"Роль: {target_user.get('role')}\n"
+                f"Город: {target_user.get('city')}\n"
+                f"Согласие: {target_user.get('consent_given')}"
+            )
+            await callback_query.message.edit_text(info, reply_markup=kb)
+        await callback_query.answer()
+
     elif data.startswith("admin_del_"):
         target_uid = data.split("_", 2)[2]
         if target_uid in db["users"]:
-
             for oid in list(db["orders"].keys()):
                 if db["orders"][oid].get("client_id") == target_uid or db["orders"][oid].get("remover_id") == target_uid:
                     del db["orders"][oid]
-            name = db["users"][target_uid].get("name", "Пользователь")
             del db["users"][target_uid]
             if target_uid in db["consents"]:
                 del db["consents"][target_uid]
             save_db(db)
-            log_audit("ADMIN_USER_DELETE", uid, f"Deleted UID:{target_uid}")
-            await callback_query.message.edit_text(f"{name} удалён.")
+            await callback_query.message.edit_text("Пользователь удалён.")
             await list_users_for_admin(client, callback_query.message)
         await callback_query.answer()
 
@@ -719,7 +766,6 @@ async def process_delete_account(client: Client, callback_query: CallbackQuery):
     uid = str(callback_query.from_user.id)
     db = get_db()
 
-
     for oid in list(db["orders"].keys()):
         if db["orders"][oid].get("client_id") == uid or db["orders"][oid].get("remover_id") == uid:
             del db["orders"][oid]
@@ -732,10 +778,8 @@ async def process_delete_account(client: Client, callback_query: CallbackQuery):
         del user_states[uid]
 
     save_db(db)
-    log_audit("ACCOUNT_DELETED", uid)
     await callback_query.message.edit_text("Ваш аккаунт и данные успешно удалены.")
     await callback_query.answer()
-
 
 @app.on_message(filters.command("cancel") & filters.private)
 async def cancel_command(client: Client, message: Message):
@@ -756,7 +800,6 @@ async def withdraw_consent(client: Client, message: Message):
     if uid in db["users"]:
         db["users"][uid]["consent_given"] = False
         save_db(db)
-    log_audit("CONSENT_WITHDRAWN", uid)
     await message.reply(
         "Согласие на обработку ПДн отозвано. Доступ к персонализированным функциям ограничен.\n"
         "Для повторной активации используйте /start."
@@ -787,6 +830,5 @@ async def cleanup_expired_data():
             continue
     if deleted:
         save_db(db)
-        logger.info(f"Cleanup: removed {deleted} expired orders")
 
 app.run()

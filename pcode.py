@@ -3,7 +3,6 @@ import os
 import re
 import logging
 import hashlib
-import secrets
 from datetime import datetime, timedelta
 from functools import wraps
 from typing import Optional, Dict, Any, Tuple
@@ -19,158 +18,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-
 BOT_TOKEN = ""
 API_ID = 
 API_HASH = ""
 FILE = "data.json"
-ADMIN_PASSWORD = "123"
+ADMIN_PASSWORD = "123"  
 
-DADATA_API_KEY = ""
-DADATA_SECRET_KEY = ""
-
-
-S_BOX = [
-    [4, 10, 9, 2, 13, 8, 0, 14, 6, 11, 1, 12, 7, 15, 5, 3],
-    [14, 11, 4, 12, 6, 13, 15, 10, 2, 3, 8, 1, 0, 7, 5, 9],
-    [5, 8, 1, 13, 10, 3, 4, 2, 14, 15, 12, 7, 6, 0, 9, 11],
-    [7, 13, 10, 1, 0, 8, 9, 15, 14, 4, 6, 12, 11, 2, 5, 3],
-    [6, 12, 7, 1, 5, 15, 13, 8, 4, 10, 9, 14, 0, 3, 11, 2],
-    [4, 11, 10, 0, 7, 2, 1, 13, 3, 6, 8, 5, 9, 12, 15, 14],
-    [13, 11, 4, 1, 3, 15, 5, 9, 0, 10, 14, 7, 6, 8, 2, 12],
-    [1, 15, 13, 0, 5, 7, 10, 4, 9, 2, 3, 14, 6, 11, 8, 12],
-]
-
-def _gost_substitute(block: int) -> int:
-
-    res = 0
-    for i in range(8):
-        nibble = (block >> (4 * i)) & 0xF
-        res |= (S_BOX[i][nibble] << (4 * i))
-    return res
-
-def _gost_round(block: int, key: int) -> int:
-
-    res = (block + key) & 0xFFFFFFFF
-    res = _gost_substitute(res)
-
-    res = ((res << 11) | (res >> 21)) & 0xFFFFFFFF
-    return res
-
-def gost_encrypt_block(blk: int, keys: list) -> int:
-
-    left = (blk >> 32) & 0xFFFFFFFF
-    right = blk & 0xFFFFFFFF
-
-    for i in range(24):
-        round_key = keys[i % 8]
-        left, right = right, left ^ _gost_round(right, round_key)
-
-    for i in range(8):
-        round_key = keys[7 - i]
-        left, right = right, left ^ _gost_round(right, round_key)
-
-    for i in range(8):
-        round_key = keys[i]
-        left, right = right, left ^ _gost_round(right, round_key)
-
-    return (left << 32) | right
-
-def gost_decrypt_block(blk: int, keys: list) -> int:
-
-    left = (blk >> 32) & 0xFFFFFFFF
-    right = blk & 0xFFFFFFFF
-
-    for i in range(8):
-        round_key = keys[7 - i]
-        left, right = right, left ^ _gost_round(right, round_key)
-    for i in range(8):
-        round_key = keys[i]
-        left, right = right, left ^ _gost_round(right, round_key)
-    for i in range(24):
-        round_key = keys[(23 - i) % 8]
-        left, right = right, left ^ _gost_round(right, round_key)
-    return (left << 32) | right
-
-def expand_key(key_256: bytes) -> list:
-
-    if len(key_256) != 32:
-        raise ValueError("Ключ должен быть 32 байта")
-    keys = []
-    for i in range(8):
-        k = int.from_bytes(key_256[i*4:(i+1)*4], byteorder='little')
-        keys.append(k)
-    return keys
-
-
-KEY_FILE = "magma.key"
-if os.path.exists(KEY_FILE):
-    with open(KEY_FILE, "rb") as f:
-        SECRET_KEY = f.read()
-    if len(SECRET_KEY) != 32:
-        SECRET_KEY = secrets.token_bytes(32)
-        with open(KEY_FILE, "wb") as f:
-            f.write(SECRET_KEY)
-else:
-    SECRET_KEY = secrets.token_bytes(32)
-    with open(KEY_FILE, "wb") as f:
-        f.write(SECRET_KEY)
-    os.chmod(KEY_FILE, 0o600)
-
-ROUND_KEYS = expand_key(SECRET_KEY)
-
-def pad_pkcs7(data: bytes, block_size: int = 8) -> bytes:
-
-    pad_len = block_size - (len(data) % block_size)
-    return data + bytes([pad_len] * pad_len)
-
-def unpad_pkcs7(data: bytes) -> bytes:
-
-    pad_len = data[-1]
-    if pad_len < 1 or pad_len > 8:
-        raise ValueError("Некорректное дополнение")
-    return data[:-pad_len]
-
-def encrypt_magma_cbc(plaintext: bytes) -> bytes:
-
-    iv = secrets.token_bytes(8)
-    prev = int.from_bytes(iv, byteorder='big')
-
-    padded = pad_pkcs7(plaintext, 8)
-    blocks = [padded[i:i+8] for i in range(0, len(padded), 8)]
-    cipher_blocks = []
-    for block in blocks:
-        b = int.from_bytes(block, byteorder='big')
-
-        xored = b ^ prev
-        enc_block = gost_encrypt_block(xored, ROUND_KEYS)
-        cipher_blocks.append(enc_block)
-        prev = enc_block
-
-    result = iv
-    for cb in cipher_blocks:
-        result += cb.to_bytes(8, byteorder='big')
-    return result
-
-def decrypt_magma_cbc(ciphertext: bytes) -> bytes:
-
-    if len(ciphertext) < 8:
-        raise ValueError("Зашифрованные данные слишком короткие")
-    iv = ciphertext[:8]
-    encrypted_blocks = ciphertext[8:]
-    if len(encrypted_blocks) % 8 != 0:
-        raise ValueError("Некорректная длина шифротекста")
-    prev = int.from_bytes(iv, byteorder='big')
-    plain_blocks = []
-    for i in range(0, len(encrypted_blocks), 8):
-        enc_block = int.from_bytes(encrypted_blocks[i:i+8], byteorder='big')
-        dec_block = gost_decrypt_block(enc_block, ROUND_KEYS)
-        xored = dec_block ^ prev
-        plain_blocks.append(xored.to_bytes(8, byteorder='big'))
-        prev = enc_block
-    plaintext = b''.join(plain_blocks)
-    return unpad_pkcs7(plaintext)
-
+DADATA_API_KEY = "cf7b21165e788a558a05449046ddeab78dbf153f"
+DADATA_SECRET_KEY = "d6ddb27fb2a980853186f620c416b461800464e3"
 app = Client("bot_session_name", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user_states = {}
 FILE = "data.json"
@@ -196,11 +51,13 @@ audit_logger.addHandler(fh)
 app = Client("bot_session_name", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user_states: Dict[str, Dict[str, Any]] = {}
 
+
 def log_audit(action: str, user_id: str, details: Optional[str] = None):
     msg = f"ACTION:{action} | UID:{user_id}"
     if details:
         msg += f" | DETAILS:{details}"
     audit_logger.info(msg)
+
 
 def require_registered(func):
     @wraps(func)
@@ -223,25 +80,22 @@ def get_db() -> Dict[str, Any]:
     if not os.path.exists(FILE):
         return {"users": {}, "orders": {}, "consents": {}}
     try:
-        with open(FILE, "rb") as f:
-            encrypted_data = f.read()
-        plain = decrypt_magma_cbc(encrypted_data)
-        data = json.loads(plain.decode("utf-8"))
+        with open(FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
         for key in ["users", "orders", "consents"]:
             if key not in data:
                 data[key] = {}
         return data
     except Exception as e:
-        logger.error(f"DB read/decrypt error: {e}")
+        logger.error(f"DB read error: {e}")
         return {"users": {}, "orders": {}, "consents": {}}
+
 
 def save_db(data: Dict[str, Any]) -> bool:
     try:
-        json_str = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
-        encrypted = encrypt_magma_cbc(json_str)
         temp_file = f"{FILE}.tmp"
-        with open(temp_file, "wb") as f:
-            f.write(encrypted)
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
         os.replace(temp_file, FILE)
         if os.name != "nt":
             os.chmod(FILE, 0o600)
@@ -249,6 +103,7 @@ def save_db(data: Dict[str, Any]) -> bool:
     except Exception as e:
         logger.error(f"DB save error: {e}")
         return False
+
 
 def hash_sensitive(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
@@ -405,12 +260,12 @@ async def start(client: Client, message: Message):
     user = db["users"].get(uid)
 
     if user and user.get("consent_given"):
-
+        # 🔒 FIX: безопасное получение + авто-миграция отсутствующей роли
         role = user.get("role")
         if not role or role not in ["Клиент", "Выноситель", "Админ"]:
             role = "Клиент"
             db["users"][uid]["role"] = role
-            save_db(db)
+            save_db(db)  # Сохраняем исправление в БД
 
         log_audit("LOGIN", uid, f"Role:{role}")
         await message.reply(f"С возвращением! Вы вошли как {role}.", reply_markup=get_reply_keyboard(role))
@@ -932,7 +787,7 @@ async def text_handler(client: Client, message: Message):
             db["users"][uid]["city"] = city
             save_db(db)
             log_audit("PROFILE_UPDATE", uid, f"City:{city}")
-
+            # FIX: безопасное получение роли с дефолтом
             current_role = db["users"][uid].get("role", "Клиент")
             if current_role not in ["Клиент", "Выноситель", "Админ"]:
                 current_role = "Клиент"
